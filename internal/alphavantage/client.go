@@ -25,67 +25,58 @@ func NewClient(apiKey string) *Client {
 }
 
 func (c *Client) GetStockDetails(stockSymbol string) (*StockDetails, error) {
-	price, err := c.getGlobalQuote(stockSymbol)
+	gqResp, err := c.httpClient.Get(fmt.Sprintf(c.url, "GLOBAL_QUOTE", stockSymbol, c.apiKey))
 	if err != nil {
-		return nil, fmt.Errorf("failed to get alpha vantage global quote: %w", err)
+		return nil, err
+	}
+	defer gqResp.Body.Close()
+
+	if gqResp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("expected status code 200, got %d", gqResp.StatusCode)
 	}
 
-	eps, bvps, err := c.getOverview(stockSymbol)
+	var globalQuoteResponse struct {
+		GlobalQuote *GlobalQuote `json:"Global Quote"`
+	}
+	if err := json.NewDecoder(gqResp.Body).Decode(&globalQuoteResponse); err != nil {
+		return nil, fmt.Errorf("failed to decpde alpha vantage global quote: %w", err)
+	}
+
+	price, err := strconv.ParseFloat(globalQuoteResponse.GlobalQuote.Price, 64)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse price from alpha vantage global quote: %w", err)
+	}
+
+	oResp, err := c.httpClient.Get(fmt.Sprintf(c.url, "OVERVIEW", stockSymbol, c.apiKey))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get alpha vantage overview: %w", err)
 	}
+	defer oResp.Body.Close()
 
-	return &StockDetails{
-		Price: price,
-		EPS:   eps,
-		BVPS:  bvps,
-	}, err
-}
-
-func (c *Client) getGlobalQuote(stockSymbol string) (float64, error) {
-	resp, err := c.httpClient.Get(fmt.Sprintf(c.url, "GLOBAL_QUOTE", stockSymbol, c.apiKey))
-	if err != nil {
-		return 0, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("expected status code 200, got %d", resp.StatusCode)
+	if oResp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("expected status code 200, got %d", oResp.StatusCode)
 	}
 
-	var globalQuote *GlobalQuoteResponse
-	if err := json.NewDecoder(resp.Body).Decode(&globalQuote); err != nil {
-		return 0, err
-	}
-
-	return strconv.ParseFloat(globalQuote.GlobalQuote.CurrentPrice, 64)
-}
-
-func (c *Client) getOverview(stockSymbol string) (float64, float64, error) {
-	resp, err := c.httpClient.Get(fmt.Sprintf(c.url, "OVERVIEW", stockSymbol, c.apiKey))
-	if err != nil {
-		return 0, 0, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return 0, 0, fmt.Errorf("expected status code 200, got %d", resp.StatusCode)
-	}
-
-	var overview *OverviewResponse
-	if err := json.NewDecoder(resp.Body).Decode(&overview); err != nil {
-		return 0, 0, err
+	var overview *Overview
+	if err := json.NewDecoder(oResp.Body).Decode(&overview); err != nil {
+		return nil, err
 	}
 
 	eps, err := strconv.ParseFloat(overview.EPS, 64)
 	if err != nil {
-		return 0, 0, err
+		return nil, err
 	}
 
-	bvps, err := strconv.ParseFloat(overview.BVPS, 64)
+	bvps, err := strconv.ParseFloat(overview.BookValue, 64)
 	if err != nil {
-		return 0, 0, err
+		return nil, err
 	}
 
-	return eps, bvps, nil
+	return &StockDetails{
+		Price:       price,
+		EPS:         eps,
+		BVPS:        bvps,
+		GlobalQuote: globalQuoteResponse.GlobalQuote,
+		Overview:    overview,
+	}, err
 }
